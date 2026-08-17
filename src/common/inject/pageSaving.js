@@ -48,6 +48,48 @@ function determineAttachmentType(attachment) {
 	return Zotero.getString("itemType_attachment");
 }
 
+function sanitizeSmartTagText(value, maximumLength) {
+	return String(value || "")
+		.replace(/[\u0000-\u001F\u007F]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, maximumLength);
+}
+
+function smartTagMetadataPayload(sessionID, items) {
+	items = Array.isArray(items) ? items : [];
+	if (items.length !== 1) {
+		return { sessionID, itemCount: items.length, item: null };
+	}
+	const item = items[0] || {};
+	let creators = Array.isArray(item.creators) ? item.creators : [];
+	const authors = creators.filter(creator => !creator.creatorType || creator.creatorType === "author");
+	if (!authors.length) authors.push(...creators);
+	const tags = (Array.isArray(item.tags) ? item.tags : [])
+		.map(tag => sanitizeSmartTagText(typeof tag === "object" ? tag.tag : tag, 120))
+		.filter(Boolean)
+		.slice(0, 100);
+	return {
+		sessionID,
+		itemCount: 1,
+		item: {
+			title: sanitizeSmartTagText(item.title, 1200),
+			abstract: sanitizeSmartTagText(item.abstractNote || item.abstract, 12000),
+			authors: authors.map(creator => sanitizeSmartTagText(
+				[creator.firstName, creator.lastName, creator.name].filter(Boolean).join(" "), 240
+			)).filter(Boolean).slice(0, 50),
+			tags: [...new Set(tags)]
+		}
+	};
+}
+
+function sendSmartTagMetadata(sessionID, items) {
+	Zotero.Messaging.sendMessage(
+		"progressWindow.itemMetadata",
+		smartTagMetadataPayload(sessionID, items)
+	);
+}
+
 /**
  * Namespace for page saving related functions injected into pages by the connector
  */
@@ -292,6 +334,7 @@ let PageSaving = {
 		}
 		items = this._processNote(items);
 		this.sessionDetails.items = items;
+		sendSmartTagMetadata(sessionID, items);
 		let itemType = translators[0].itemType;
 		let itemSaver = new Zotero.ItemSaver({ sessionID, itemType, baseURI: document.location.href, proxy });
 		this.sessionDetails.itemSaver = itemSaver;
@@ -344,6 +387,7 @@ let PageSaving = {
 			title: title
 		}];
 		this.sessionDetails.items = items;
+		sendSmartTagMetadata(sessionID, [{ title }]);
 		Zotero.Messaging.sendMessage("progressWindow.itemProgress", items[0]);
 
 		try {
@@ -478,6 +522,7 @@ let PageSaving = {
 			if (canRecognize) {
 				let item = await Zotero.Connector.callMethod("getRecognizedItem", { sessionID: sessionID });
 				if (item) {
+					sendSmartTagMetadata(sessionID, [item]);
 					item.id = 2;
 					item.iconSrc = Zotero.ItemTypes.getImageSrc(item.itemType);
 					progressItem.parentItem = 2;

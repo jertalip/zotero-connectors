@@ -105,6 +105,10 @@ Zotero.UI.ProgressWindow = class ProgressWindow extends React.PureComponent {
 		this.updateSelectedTags = this.updateSelectedTags.bind(this);
 		this.onTagAutocompleteShown = this.onTagAutocompleteShown.bind(this);
 		this.sendUpdate	= this.sendUpdate.bind(this);
+		this.reset = this.reset.bind(this);
+		this.sessionChanged = this.sessionChanged.bind(this);
+		this.sessionCreated = this.sessionCreated.bind(this);
+		this.itemMetadata = this.itemMetadata.bind(this);
 	}
 	
 	getInitialState() {
@@ -117,7 +121,10 @@ Zotero.UI.ProgressWindow = class ProgressWindow extends React.PureComponent {
 			errors: [],
 			note: "",
 			selectedTags: new Set(),
-			extraHeightForTagAutocomplete: 0
+			extraHeightForTagAutocomplete: 0,
+			activeSessionID: null,
+			completedSessionID: null,
+			smartTagPayload: null
 		};
 	}
 	
@@ -127,7 +134,10 @@ Zotero.UI.ProgressWindow = class ProgressWindow extends React.PureComponent {
 		}
 		this.addMessageListener('progressWindowIframe.shown', this.handleShown.bind(this));
 		this.addMessageListener('progressWindowIframe.hidden', this.handleHidden.bind(this));
-		this.addMessageListener('progressWindowIframe.reset', () => this.setState(this.getInitialState()));
+		this.addMessageListener('progressWindowIframe.reset', this.reset);
+		this.addMessageListener('progressWindowIframe.sessionChanged', this.sessionChanged);
+		this.addMessageListener('progressWindowIframe.sessionCreated', this.sessionCreated);
+		this.addMessageListener('progressWindowIframe.itemMetadata', this.itemMetadata);
 		this.addMessageListener('progressWindowIframe.willHide', this.handleHiding.bind(this));
 		
 		document.addEventListener('visibilitychange', this.handleVisibilityChange.bind(this));
@@ -189,6 +199,58 @@ Zotero.UI.ProgressWindow = class ProgressWindow extends React.PureComponent {
 	//
 	// State update
 	//
+	reset() {
+		this.done = false;
+		this.existingTags = {};
+		this.currentLibraryID = null;
+		this.setState(this.getInitialState());
+	}
+
+	sessionChanged(sessionID) {
+		if (sessionID === this.state.activeSessionID) return;
+		this.done = false;
+		this.setState({
+			activeSessionID: sessionID,
+			completedSessionID: null,
+			smartTagPayload: null,
+			selectedTags: new Set()
+		});
+	}
+
+	sessionCreated(sessionID) {
+		if (sessionID === this.state.activeSessionID) {
+			this.setState({ completedSessionID: sessionID });
+		}
+	}
+
+	itemMetadata(payload) {
+		if (!payload || payload.sessionID !== this.state.activeSessionID) return;
+		this.setState({ smartTagPayload: payload });
+	}
+
+	getLibraryTargetID(target, targets = this.state.targets) {
+		if (!target) return null;
+		if (getTargetType(target.id) === 'library') return target.id;
+		if (!targets) return null;
+		let selectedLibrary = targets.find(row => row.id == target.id) || target;
+		while (selectedLibrary && selectedLibrary.level > 0) {
+			selectedLibrary = getParent(targets, selectedLibrary.id);
+		}
+		return selectedLibrary?.id || null;
+	}
+
+	getCurrentLibraryTags() {
+		if (!this.currentLibraryID) return [];
+		return this.existingTags[this.currentLibraryID]
+			|| this.existingTags[String(this.currentLibraryID).replace(/^L/, '')]
+			|| [];
+	}
+
+	getCurrentLibraryNumericID() {
+		const match = String(this.currentLibraryID || '').match(/(\d+)$/);
+		return match ? Number(match[1]) : null;
+	}
+
 	changeHeadline(text, target, targets, tags) {
 		// Target selector mode
 		if (targets) {
@@ -227,7 +289,8 @@ Zotero.UI.ProgressWindow = class ProgressWindow extends React.PureComponent {
 		// Alert that the item is being saved or has already been saved
 		let alert = this.done ? Zotero.getString("progressWindow_alreadySaved") : `${text} ${targetName}`;
 		document.getElementById("messageAlert").textContent = alert; 
-		this.existingTags = tags;
+		this.existingTags = tags || {};
+		this.currentLibraryID = this.getLibraryTargetID(target, targets) || this.currentLibraryID;
 		this.setState(state, () => {
 			this.setFilter();
 		});
@@ -489,21 +552,15 @@ Zotero.UI.ProgressWindow = class ProgressWindow extends React.PureComponent {
 		var target = this.state.targets.find(row => row.id == id);
 		// Record the library the current target belongs to - it is used to
 		// pick the right tags for autocompletion
-		let selectedLibrary = null;
-		if (target && target.level !== undefined)  {
-			selectedLibrary = target;
-			while (selectedLibrary && selectedLibrary.level > 0) {
-				selectedLibrary = getParent(this.state.targets, selectedLibrary.id);
-			}
-		}
+		let selectedLibraryID = this.getLibraryTargetID(target);
 		// Clear selected tags if the library changes since another group
 		// may have completely different tags
 		let selectedTags = this.state.selectedTags;
-		if (selectedLibrary && selectedLibrary.id !== this.currentLibraryID) {
-			this.currentLibraryID = selectedLibrary.id;
+		if (selectedLibraryID && selectedLibraryID !== this.currentLibraryID) {
+			this.currentLibraryID = selectedLibraryID;
 			// If the library has no tags (likely because the older version of Zotero)
 			// did not send them over, do not clear the tags
-			if ((this.existingTags[this.currentLibraryID] || []).length) {
+			if (this.getCurrentLibraryTags().length) {
 				selectedTags = new Set();
 			}
 		}
@@ -873,9 +930,14 @@ Zotero.UI.ProgressWindow = class ProgressWindow extends React.PureComponent {
 			)
 		}
 		const tagsInputElement = (
-			<TagsInput
-					existingTags={this.existingTags[this.currentLibraryID] || []}
+			<SmartTagsInput
+					key={`${this.state.activeSessionID || ''}:${this.currentLibraryID || ''}`}
+					existingTags={this.getCurrentLibraryTags()}
 					selectedTags={this.state.selectedTags}
+					libraryID={this.getCurrentLibraryNumericID()}
+					activeSessionID={this.state.activeSessionID}
+					completedSessionID={this.state.completedSessionID}
+					smartTagPayload={this.state.smartTagPayload}
 					supportsTagsAutocomplete={this.supportsTagsAutocomplete}
 					updateSelectedTags={this.updateSelectedTags}
 					sendMessage={this.sendMessage}
@@ -1534,6 +1596,353 @@ class TagsInput extends React.Component {
 						</div>
 					) : <></>}
 				</div>
+			</div>
+		);
+	}
+}
+
+class SmartTagsInput extends TagsInput {
+	constructor(props) {
+		super(props);
+		this.state = {
+			...this.state,
+			showTagsAutocomplete: false,
+			fastSuggestions: [],
+			aiSuggestions: [],
+			fastLoading: false,
+			aiLoading: false,
+			aiStatus: ""
+		};
+		this.tagIndex = ZoteroTagMatcher.createIndex(props.existingTags || []);
+		this.localSuggestions = this.buildLocalSuggestions(props);
+		this.fastRequestTracker = new ZoteroTagMatcher.RequestTracker();
+		this.aiRequestTracker = new ZoteroTagMatcher.RequestTracker();
+		this.text.aiTags = "AI tags";
+	}
+
+	componentDidMount() {
+		this.loadFastSuggestions();
+	}
+
+	componentWillUnmount() {
+		this.fastRequestTracker.reset("");
+		this.aiRequestTracker.reset("");
+	}
+
+	componentDidUpdate(prevProps, prevState) {
+		super.componentDidUpdate(prevProps, prevState);
+		const existingTagsChanged = prevProps.existingTags !== this.props.existingTags;
+		const identityChanged = this.getSuggestionIdentity(prevProps) !== this.getSuggestionIdentity();
+		if (existingTagsChanged) {
+			this.tagIndex = ZoteroTagMatcher.createIndex(this.props.existingTags || []);
+		}
+		if (existingTagsChanged || identityChanged) {
+			this.localSuggestions = this.buildLocalSuggestions();
+			this.fastRequestTracker.reset(this.getSuggestionIdentity());
+			this.aiRequestTracker.reset(this.getSuggestionIdentity());
+			this.setState({
+				fastSuggestions: [],
+				aiSuggestions: [],
+				fastLoading: false,
+				aiLoading: false,
+				aiStatus: "",
+				currentTagIndex: -1
+			}, () => this.loadFastSuggestions());
+		}
+	}
+
+	getSuggestionIdentity(props = this.props) {
+		const payload = props.smartTagPayload;
+		return [
+			props.activeSessionID || "",
+			props.libraryID || "",
+			payload?.itemCount || 0,
+			payload?.item?.title || ""
+		].join("|");
+	}
+
+	isSmartEnabled(props = this.props) {
+		return !!props.libraryID && ZoteroTagMatcher.isSingleItemPayload(props.smartTagPayload);
+	}
+
+	buildLocalSuggestions(props = this.props) {
+		if (!this.isSmartEnabled(props)) return [];
+		return ZoteroTagMatcher.contextual(
+			props.smartTagPayload.item,
+			this.tagIndex,
+			new Set(),
+			8
+		);
+	}
+
+	withTimeout(promise, milliseconds) {
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error("Suggestion request timed out.")), milliseconds);
+			Promise.resolve(promise).then(
+				value => {
+					clearTimeout(timer);
+					resolve(value);
+				},
+				error => {
+					clearTimeout(timer);
+					reject(error);
+				}
+			);
+		});
+	}
+
+	bridgeRequest(mode) {
+		const payload = this.props.smartTagPayload;
+		const request = {
+			schemaVersion: 1,
+			mode,
+			libraryID: this.props.libraryID,
+			limit: mode === "llm" ? 5 : 8,
+			item: payload.item
+		};
+		if (this.props.completedSessionID) {
+			request.sessionID = this.props.completedSessionID;
+		}
+		return this.withTimeout(
+			Zotero.Connector.callMethod("keywordManagerSuggestions", request),
+			mode === "fast" ? 800 : 60000
+		);
+	}
+
+	async loadFastSuggestions() {
+		if (!this.isSmartEnabled()) return;
+		const identity = this.getSuggestionIdentity();
+		const request = this.fastRequestTracker.start(identity);
+		this.setState({ fastLoading: true });
+		try {
+			const response = await this.bridgeRequest("fast");
+			if (!this.fastRequestTracker.isCurrent(request, this.getSuggestionIdentity())) return;
+			this.setState({
+				fastSuggestions: Array.isArray(response?.suggestions) ? response.suggestions : [],
+				fastLoading: false
+			});
+		}
+		catch (error) {
+			if (!this.fastRequestTracker.isCurrent(request, this.getSuggestionIdentity())) return;
+			// The bridge is optional. Local metadata and fuzzy results remain available.
+			this.setState({ fastSuggestions: [], fastLoading: false });
+		}
+	}
+
+	requestAITags = async () => {
+		if (!this.isSmartEnabled() || this.state.aiLoading) return;
+		const identity = this.getSuggestionIdentity();
+		const request = this.aiRequestTracker.start(identity);
+		this.props.sendMessage('disableCloseTimer');
+		this.setState({
+			aiLoading: true,
+			aiStatus: "Generating AI tags…",
+			showTagsAutocomplete: true
+		});
+		this.tagsInputNode.current?.focus();
+		try {
+			const response = await this.bridgeRequest("llm");
+			if (!this.aiRequestTracker.isCurrent(request, this.getSuggestionIdentity())) return;
+			const suggestions = (Array.isArray(response?.suggestions) ? response.suggestions : [])
+				.filter(suggestion => suggestion.sources?.includes("ai"));
+			let status = suggestions.length ? "AI tags ready." : "No AI tags were returned.";
+			if (response?.capabilities?.ollama?.available === false) {
+				status = "Ollama is unavailable; fast suggestions remain available.";
+			}
+			else if (!suggestions.length && response?.partial) {
+				status = "AI generation failed; fast suggestions remain available.";
+			}
+			this.setState({ aiSuggestions: suggestions, aiLoading: false, aiStatus: status });
+		}
+		catch (error) {
+			if (!this.aiRequestTracker.isCurrent(request, this.getSuggestionIdentity())) return;
+			this.setState({
+				aiSuggestions: [],
+				aiLoading: false,
+				aiStatus: "Keyword Manager or Ollama is unavailable; fast suggestions remain available."
+			});
+		}
+	}
+
+	getAvailableSuggestions() {
+		const fuzzy = ZoteroTagMatcher.rank(
+			this.tagIndex,
+			this.state.tagsInput,
+			this.props.selectedTags,
+			8
+		);
+		const contextual = ZoteroTagMatcher.mergeSuggestions(
+			this.localSuggestions,
+			[...this.state.fastSuggestions, ...this.state.aiSuggestions],
+			this.state.tagsInput,
+			this.props.selectedTags,
+			8
+		);
+		if (!this.state.tagsInput.trim()) return contextual;
+		return ZoteroTagMatcher.mergeSuggestions(
+			fuzzy,
+			contextual,
+			this.state.tagsInput,
+			this.props.selectedTags,
+			8
+		);
+	}
+
+	getAvailableTags() {
+		return this.getAvailableSuggestions().map(suggestion => suggestion.tag);
+	}
+
+	onTagsInputChange = (event) => {
+		this.setState({ tagsInput: event.target.value, currentTagIndex: -1, showTagsAutocomplete: true });
+	}
+
+	onTagAutocompleteMouseDown = (event, index) => {
+		event.preventDefault();
+		this.isClickingTag = true;
+		this.setState({ currentTagIndex: index });
+	}
+
+	onTagAutocompleteClick = (suggestion) => {
+		this.isClickingTag = false;
+		this.addTag(suggestion.tag);
+		this.setState({ currentTagIndex: -1, showTagsAutocomplete: true });
+	}
+
+	onTagsInputKeyDown = (event) => {
+		const suggestions = this.getAvailableSuggestions();
+		if (event.key === "Enter") {
+			const newTag = suggestions[this.state.currentTagIndex]?.tag || this.state.tagsInput.trim();
+			if (newTag) this.addTag(newTag);
+			else this.props.handleDone();
+			event.preventDefault();
+			event.stopPropagation();
+			return;
+		}
+		if (event.key === "Escape") {
+			this.setState({ showTagsAutocomplete: false, currentTagIndex: -1 });
+			event.preventDefault();
+			event.stopPropagation();
+			return;
+		}
+		if (!this.state.showTagsAutocomplete || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+		let nextIndex;
+		if (event.key === "ArrowDown") {
+			nextIndex = Math.min(suggestions.length - 1, this.state.currentTagIndex + 1);
+		}
+		else {
+			nextIndex = this.state.currentTagIndex < 0
+				? suggestions.length - 1 : Math.max(0, this.state.currentTagIndex - 1);
+		}
+		if (nextIndex >= 0) {
+			this.setState({ currentTagIndex: nextIndex });
+			event.preventDefault();
+		}
+	}
+
+	onTagsInputFocus = () => {
+		this.props.sendMessage('disableCloseTimer');
+		this.isClickingTag = false;
+		this.setState({ showTagsAutocomplete: true });
+	}
+
+	onTagsInputBlur = () => {
+		if (this.isClickingTag) return;
+		if (this.state.tagsInput.trim().length) {
+			this.addTag(this.state.tagsInput);
+		}
+		this.props.sendMessage('enableCloseTimer');
+		this.props.sendUpdate();
+		this.setState({ showTagsAutocomplete: false });
+	}
+
+	sourceLabel(source) {
+		return ({ metadata: "Metadata", author: "Author", zotseek: "ZotSeek", ai: "AI" })[source] || "";
+	}
+
+	render() {
+		const suggestions = this.getAvailableSuggestions();
+		const willShowAutocomplete = this.state.showTagsAutocomplete && suggestions.length > 0;
+		const hasActiveDescendant = willShowAutocomplete && this.state.currentTagIndex >= 0;
+		const smartEnabled = this.isSmartEnabled();
+
+		return (
+			<div className={`ProgressWindow-targetSelectorTagsRow ${willShowAutocomplete ? 'with-autocomplete' : ''} ${this.props.selectedTags.size ? 'hasTags' : ''}`}>
+				<div
+					className="ProgressWindow-tagsRow"
+					tabIndex={this.props.selectedTags.size ? 0 : -1}
+					role="group"
+					aria-activedescendant={`tag_${this.selectedTagActiveIndex}`}
+					onKeyDown={this.onSelectedTagsKeyDown}>
+					{ Array.from(this.props.selectedTags).map((tag, index) => (
+						<div key={tag}
+							id={`tag_${index}`}
+							className={`ProgressWindow-selectedTag ${this.selectedTagActiveIndex === index ? 'active' : ''}`}
+							aria-label={tag}
+							aria-description={Zotero.getString('progressWindow_removeTag')}>
+							<span className="ProgressWindow-tagLabel" aria-hidden="true"> {tag} </span>
+							<span className="ProgressWindow-removeTag" onClick={() => this.removeTag(tag)}></span>
+						</div>
+					))}
+				</div>
+				<div className="ProgressWindow-inputRow">
+					<input
+						ref={this.tagsInputNode}
+						className="ProgressWindow-tagsInput"
+						type="text"
+						role="combobox"
+						aria-expanded={willShowAutocomplete}
+						aria-controls="tags-autocomplete"
+						aria-activedescendant={hasActiveDescendant ? `tags-autocomplete-option-${this.state.currentTagIndex}` : ""}
+						aria-autocomplete="list"
+						value={this.state.tagsInput}
+						placeholder={this.state.tagsInput ? "" : this.text.tagsPlaceholder}
+						onChange={this.onTagsInputChange}
+						onKeyDown={this.onTagsInputKeyDown}
+						onFocus={this.onTagsInputFocus}
+						onBlur={this.onTagsInputBlur}/>
+					{smartEnabled ? (
+						<button
+							type="button"
+							className="ProgressWindow-aiButton"
+							disabled={this.state.aiLoading}
+							aria-label="Generate tag suggestions with the local language model"
+							onMouseDown={event => event.preventDefault()}
+							onClick={this.requestAITags}>
+							{this.state.aiLoading ? "AI…" : this.text.aiTags}
+						</button>
+					) : <></>}
+					<button className="ProgressWindow-button" onClick={this.props.handleDone}>{this.text.done}</button>
+					{willShowAutocomplete ? (
+						<div id="tags-autocomplete" className="ProgressWindow-autocomplete" role="listbox" ref={this.autocompletePopupRef}>
+							{suggestions.map((suggestion, index) => {
+								const labels = suggestion.sources.map(source => this.sourceLabel(source)).filter(Boolean);
+								return (
+									<div
+										key={ZoteroTagMatcher.normalize(suggestion.tag)}
+										id={`tags-autocomplete-option-${index}`}
+										ref={el => this.autocompleteRefs[index] = el}
+										className={`ProgressWindow-autocompleteOption ${this.state.currentTagIndex == index ? 'active' : ''}`}
+										role="option"
+										aria-selected={this.state.currentTagIndex == index}
+										aria-label={`${suggestion.tag}, ${suggestion.kind === 'existing' ? 'Existing' : 'New'}${labels.length ? ', ' + labels.join(', ') : ''}`}
+										onMouseDown={event => this.onTagAutocompleteMouseDown(event, index)}
+										onClick={() => this.onTagAutocompleteClick(suggestion)}>
+										<span className="ProgressWindow-autocompleteLabel">{suggestion.tag}</span>
+										<span className={`ProgressWindow-suggestionKind is-${suggestion.kind}`}>
+											{suggestion.kind === "existing" ? "Existing" : "New"}
+										</span>
+										{labels.map(label => <span key={label} className="ProgressWindow-suggestionSource">{label}</span>)}
+									</div>
+								);
+							})}
+						</div>
+					) : <></>}
+				</div>
+				{smartEnabled ? (
+					<div className="ProgressWindow-smartStatus" role="status" aria-live="polite">
+						{this.state.aiStatus || (this.state.fastLoading ? "Finding tag suggestions…" : "")}
+					</div>
+				) : <></>}
 			</div>
 		);
 	}

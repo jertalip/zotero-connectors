@@ -342,6 +342,9 @@ if (isTopWindow) {
 		Zotero.Messaging.addMessageListener('progressWindow.sessionCreated', async function (args) {
 			var sessionID = args.sessionID;
 			createdSessions.add(sessionID);
+			if (sessionID == currentSessionID) {
+				addEvent('sessionCreated', [sessionID]);
+			}
 			if (nextSessionUpdateData) {
 				let data = nextSessionUpdateData;
 				nextSessionUpdateData = null;
@@ -439,6 +442,7 @@ if (isTopWindow) {
 			}
 		}
 		currentSessionID = sessionID;
+		addEvent('sessionChanged', [sessionID]);
 		
 		await showFrame();
 		
@@ -450,6 +454,11 @@ if (isTopWindow) {
 		}
 		
 		return true;
+	});
+
+	Zotero.Messaging.addMessageListener("progressWindow.itemMetadata", function (data) {
+		if (!data || data.sessionID != currentSessionID) return;
+		addEvent("itemMetadata", [data]);
 	});
 	
 	/**
