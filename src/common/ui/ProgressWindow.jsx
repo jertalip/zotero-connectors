@@ -109,6 +109,7 @@ Zotero.UI.ProgressWindow = class ProgressWindow extends React.PureComponent {
 		this.sessionChanged = this.sessionChanged.bind(this);
 		this.sessionCreated = this.sessionCreated.bind(this);
 		this.itemMetadata = this.itemMetadata.bind(this);
+		this.activeSessionID = null;
 	}
 	
 	getInitialState() {
@@ -203,11 +204,15 @@ Zotero.UI.ProgressWindow = class ProgressWindow extends React.PureComponent {
 		this.done = false;
 		this.existingTags = {};
 		this.currentLibraryID = null;
+		this.activeSessionID = null;
 		this.setState(this.getInitialState());
 	}
 
 	sessionChanged(sessionID) {
-		if (sessionID === this.state.activeSessionID) return;
+		if (sessionID === this.activeSessionID) return;
+		// Keep a synchronous identity as well as the rendered state. Metadata can
+		// arrive in the same event turn, before React commits setState().
+		this.activeSessionID = sessionID;
 		this.done = false;
 		this.setState({
 			activeSessionID: sessionID,
@@ -218,13 +223,13 @@ Zotero.UI.ProgressWindow = class ProgressWindow extends React.PureComponent {
 	}
 
 	sessionCreated(sessionID) {
-		if (sessionID === this.state.activeSessionID) {
+		if (sessionID === this.activeSessionID) {
 			this.setState({ completedSessionID: sessionID });
 		}
 	}
 
 	itemMetadata(payload) {
-		if (!payload || payload.sessionID !== this.state.activeSessionID) return;
+		if (!payload || payload.sessionID !== this.activeSessionID) return;
 		this.setState({ smartTagPayload: payload });
 	}
 

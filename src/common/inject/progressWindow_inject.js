@@ -51,6 +51,10 @@ if (isTopWindow) {
 	window.Zotero.progressWindowReady = frameReadyDeferred.promise;
 	
 	var currentSessionID;
+	// Translation can finish before progressWindow.show has been handled. Keep the
+	// sanitized metadata by session so it can be replayed after the popup switches
+	// to that session instead of being dropped because of message ordering.
+	var itemMetadataBySession = new Map();
 	var createdSessions = new Set();
 	var updatingSession;
 	var nextSessionUpdateData;
@@ -443,6 +447,15 @@ if (isTopWindow) {
 		}
 		currentSessionID = sessionID;
 		addEvent('sessionChanged', [sessionID]);
+		let itemMetadata = itemMetadataBySession.get(sessionID);
+		if (itemMetadata) {
+			addEvent("itemMetadata", [itemMetadata]);
+		}
+		for (let metadataSessionID of itemMetadataBySession.keys()) {
+			if (metadataSessionID != sessionID) {
+				itemMetadataBySession.delete(metadataSessionID);
+			}
+		}
 		
 		await showFrame();
 		
@@ -457,8 +470,11 @@ if (isTopWindow) {
 	});
 
 	Zotero.Messaging.addMessageListener("progressWindow.itemMetadata", function (data) {
-		if (!data || data.sessionID != currentSessionID) return;
-		addEvent("itemMetadata", [data]);
+		if (!data?.sessionID) return;
+		itemMetadataBySession.set(data.sessionID, data);
+		if (data.sessionID == currentSessionID) {
+			addEvent("itemMetadata", [data]);
+		}
 	});
 	
 	/**

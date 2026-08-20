@@ -99,6 +99,10 @@ describe('TagMatcher', function () {
 describe('Smart tag save-popup structure', function () {
 	const progressWindow = fs.readFileSync(new URL('../../src/common/ui/ProgressWindow.jsx', import.meta.url), 'utf8');
 	const pageSaving = fs.readFileSync(new URL('../../src/common/inject/pageSaving.js', import.meta.url), 'utf8');
+	const progressWindowInject = fs.readFileSync(
+		new URL('../../src/common/inject/progressWindow_inject.js', import.meta.url),
+		'utf8'
+	);
 
 	it('keeps AI manual, non-blocking, and keyboard/mouse accessible', function () {
 		assert.match(progressWindow, /onClick=\{this\.requestAITags\}/);
@@ -123,5 +127,12 @@ describe('Smart tag save-popup structure', function () {
 		assert.match(pageSaving, /abstract: sanitizeSmartTagText/);
 		assert.match(pageSaving, /authors:/);
 		assert.match(pageSaving, /tags:/);
+	});
+
+	it('preserves metadata across popup session message ordering', function () {
+		assert.match(progressWindowInject, /itemMetadataBySession\.set\(data\.sessionID, data\)/);
+		assert.match(progressWindowInject, /itemMetadataBySession\.get\(sessionID\)/);
+		assert.match(progressWindow, /this\.activeSessionID = sessionID/);
+		assert.match(progressWindow, /payload\.sessionID !== this\.activeSessionID/);
 	});
 });
