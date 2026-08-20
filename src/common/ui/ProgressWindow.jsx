@@ -130,15 +130,15 @@ Zotero.UI.ProgressWindow = class ProgressWindow extends React.PureComponent {
 	}
 	
 	componentDidMount() {
-		for (let evt of ['changeHeadline', 'makeReadOnly', 'updateProgress', 'addError']) {
+		for (let evt of [
+			'changeHeadline', 'makeReadOnly', 'updateProgress', 'addError',
+			'sessionChanged', 'sessionCreated', 'itemMetadata'
+		]) {
 			this.addMessageListener(`progressWindowIframe.${evt}`, (data) => this[evt](...data));
 		}
 		this.addMessageListener('progressWindowIframe.shown', this.handleShown.bind(this));
 		this.addMessageListener('progressWindowIframe.hidden', this.handleHidden.bind(this));
 		this.addMessageListener('progressWindowIframe.reset', this.reset);
-		this.addMessageListener('progressWindowIframe.sessionChanged', this.sessionChanged);
-		this.addMessageListener('progressWindowIframe.sessionCreated', this.sessionCreated);
-		this.addMessageListener('progressWindowIframe.itemMetadata', this.itemMetadata);
 		this.addMessageListener('progressWindowIframe.willHide', this.handleHiding.bind(this));
 		
 		document.addEventListener('visibilitychange', this.handleVisibilityChange.bind(this));

@@ -132,6 +132,9 @@ describe('Smart tag save-popup structure', function () {
 	it('preserves metadata across popup session message ordering', function () {
 		assert.match(progressWindowInject, /itemMetadataBySession\.set\(data\.sessionID, data\)/);
 		assert.match(progressWindowInject, /itemMetadataBySession\.get\(sessionID\)/);
+		assert.match(progressWindow, /'sessionChanged', 'sessionCreated', 'itemMetadata'/);
+		assert.match(progressWindow, /\(data\) => this\[evt\]\(\.\.\.data\)/);
+		assert.notMatch(progressWindow, /'progressWindowIframe\.itemMetadata', this\.itemMetadata/);
 		assert.match(progressWindow, /this\.activeSessionID = sessionID/);
 		assert.match(progressWindow, /payload\.sessionID !== this\.activeSessionID/);
 	});
